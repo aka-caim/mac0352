@@ -3,7 +3,7 @@
 **Sequência recomendada de implementação**
 1. servidor TCP básico (aceita conexão e eco simples)
 
-[[Caio Morais]]
+**Caio Morais**
 
 Eu comecei a fazer isso. Boa parte de implementar um cliente-servidor usando programação de soquetes é um grande ctrl-c, ctrl-v do livro do Stevens (aquele que o Daniel chegou a usar pro finalzinho de SO).
 
@@ -26,6 +26,11 @@ Se a gente usar processos sem compartilhamento de memória, fica mais fácil de 
 Se usarmos I/O multiplexado, com uma única thread, não existe condição de corrida, o estado compartilhado é acessado de maneira sequencial. Págs. 404 e 407
 
 2. parser de comandos
+
+**Caio Morais**
+
+Isso eu já fiz, e já foi bem testado. É quase uma API, mas falta ainda documentar pra ficar mais claro como usar as funções.
+
 3. CREATE + GET
 4. SET
 5. LIST
