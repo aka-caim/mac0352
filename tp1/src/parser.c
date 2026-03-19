@@ -137,9 +137,9 @@ static token* lexer_read_identifier(lexer *lex) {
 
 /* public methods */
 
-void lexer_free(lexer *lexer) {
-    if (lexer)
-		free(lexer);
+void lexer_free(lexer *lex) {
+    if (lex)
+		free(lex);
 }
 
 lexer *lexer_create(const char *input) {
@@ -169,7 +169,7 @@ token* lexer_next_token(lexer *lex) {
     lexer_skip_whitespace(lex);
     
     if (lex->current_char == '\0')
-        return token_create(TOKEN_EOF, "", lexer->position);
+        return token_create(TOKEN_EOF, "", lex->position);
     
     int current_pos = lex->position;
     

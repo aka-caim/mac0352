@@ -38,15 +38,16 @@ typedef struct {
 	char current_char;
 } lexer;
 
-// public functions of the lexer
-parsed_command* parse_command(const char *input);
-void free_parsed_command(parsed_command *cmd);
-void print_parsed_command(const parsed_command *cmd);
+// public functions
+lexer *lexer_create(const char *input);
+void lexer_free(lexer *lex);
 
-// lexer functions
-lexer* lexer_create(const char *input);
-void lexer_free(lexer *lexer);
-token* lexer_next_token(lexer *lexer);
-void token_free(token *token);
+token *lexer_next_token(lexer *lex);
+void token_free(token *tok);
+
+parsed_command *parse_command(const char *input);
+void print_parsed_command(const parsed_command *cmd);
+void free_parsed_command(parsed_command *cmd);
+
 
 #endif // PARSER_H
