@@ -1,5 +1,37 @@
 _Última alteração: 27/03, 9:18 pm, Caio Morais_
 
+# Andamento do projeto
+
+## Arquitetura usada
+
+- Servidor utiliza I/O multiplexado
+- Especificamente, usa a função poll para isso. Caso queiram entender melhor, recomendo o capítulo 6 do [livro do Stevens](https://github.com/ben-elbert/books/blob/master/UNIX%20Network%20Programming%2C%20Volume%201%2C%20Third%20Edition%2C%20The%20Sockets%20Networking%20API.pdf).
+- Uma vez que a conexão é estabelecida, o servidor usa a função `handle_new_connection()`. Quando o kernel avisa que tem dados para enviar, o servidor chama `handle_client_data()`, que por sua vez usa as funções do parser para processar a mensagem do cliente.
+- A interface do parser está bem documentada, mas acho difícil que mais alguma função além do `handle_client_data()` precise dela, então não preisa se preocupar. Caso queiram debuggar ela, usem o arquivo no diretório tests.
+
+## Alguns TODOs
+
+- Para quando forem implementar as operações:
+
+Cada recurso possui:
+- identificador único
+- valor associado (string ou número)
+- estado de disponibilidade (livre ou reservado)
+- cliente responsável pela reserva (quando aplicável)
+
+## Sequência recomendada de implementação
+
+1. servidor TCP básico (aceita conexão e eco simples) = OK
+2. parser de comandos = OK
+3. CREATE + GET = falta fazer, implementar [aqui](https://github.com/aka-caim/mac0352/blob/73cec4b519a24266a7d5166ce2a374d3f8f9f90a/tp1/src/tcp_server.c#L155)
+4. SET = falta fazer, implementar [aqui](https://github.com/aka-caim/mac0352/blob/73cec4b519a24266a7d5166ce2a374d3f8f9f90a/tp1/src/tcp_server.c#L183)
+5. LIST = falta fazer, implementar [aqui](https://github.com/aka-caim/mac0352/blob/73cec4b519a24266a7d5166ce2a374d3f8f9f90a/tp1/src/tcp_server.c#L221)
+6. RESERVE + RELEASE = falta fazer, implementar [aqui] (https://github.com/aka-caim/mac0352/blob/73cec4b519a24266a7d5166ce2a374d3f8f9f90a/tp1/src/tcp_server.c#L198)
+7. múltiplos clientes = OK
+8. locks = falta fazer. precisa das operações 3-6 pra poder ser implementado
+9. tratamento de desconexão = falta fazer
+10. logging = o que já foi implementado já está loggado. Falta revisar
+
 # Tarefa prática 1. Programação com soquetes
 
 ## Arquivos
