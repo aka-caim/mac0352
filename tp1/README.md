@@ -1,5 +1,3 @@
-_Última alteração: 27/03, 9:18 pm, Caio Morais_
-
 # Andamento do projeto
 
 ## Arquitetura usada
@@ -26,7 +24,7 @@ Cada recurso possui:
 3. CREATE + GET = falta fazer, implementar [aqui](https://github.com/aka-caim/mac0352/blob/73cec4b519a24266a7d5166ce2a374d3f8f9f90a/tp1/src/tcp_server.c#L155)
 4. SET = falta fazer, implementar [aqui](https://github.com/aka-caim/mac0352/blob/73cec4b519a24266a7d5166ce2a374d3f8f9f90a/tp1/src/tcp_server.c#L183)
 5. LIST = falta fazer, implementar [aqui](https://github.com/aka-caim/mac0352/blob/73cec4b519a24266a7d5166ce2a374d3f8f9f90a/tp1/src/tcp_server.c#L221)
-6. RESERVE + RELEASE = falta fazer, implementar [aqui] (https://github.com/aka-caim/mac0352/blob/73cec4b519a24266a7d5166ce2a374d3f8f9f90a/tp1/src/tcp_server.c#L198)
+6. RESERVE + RELEASE = falta fazer, implementar [aqui](https://github.com/aka-caim/mac0352/blob/73cec4b519a24266a7d5166ce2a374d3f8f9f90a/tp1/src/tcp_server.c#L198)
 7. múltiplos clientes = OK
 8. locks = falta fazer. precisa das operações 3-6 pra poder ser implementado
 9. tratamento de desconexão = falta fazer
