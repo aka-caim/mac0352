@@ -6,7 +6,7 @@
 #define	SA struct sockaddr
 
 void error_exit(const char *message) {
-	perror(message);
+	syslog(LOG_CRIT, "server: %s: %s", message, strerror(errno));
 	exit(EXIT_FAILURE);
 }
 
@@ -22,7 +22,7 @@ static void handle_new_connection(int listen_fd, struct pollfd **poll_fds,
 		return;
 	}
 
-	// expand array if needed
+	// expand the pollfd array when needed
 	if (*nfds >= *poll_size) {
 		*poll_size *= 2;
 		*poll_fds = realloc(*poll_fds, *poll_size * sizeof(struct pollfd));
@@ -30,140 +30,247 @@ static void handle_new_connection(int listen_fd, struct pollfd **poll_fds,
 			error_exit("Error: realloc failed");
 	}
 
-	// add new client
+	// add the new client to the poll-monitored set
 	(*poll_fds)[*nfds].fd = conn_fd;
 	(*poll_fds)[*nfds].events = POLLIN;
 	(*nfds)++;
 
 	char client_ip[INET_ADDRSTRLEN];
 	inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
-	printf("Nova conexão de %s:%d (fd=%d, total=%d clientes)\n", 
-			client_ip, ntohs(client_addr.sin_port), conn_fd, *nfds - 1);
-
-	syslog(LOG_INFO, "Client connected: %s:%d (fd=%d)", 
+	syslog(LOG_INFO, "server: client connected %s:%d (fd=%d)", 
 			client_ip, ntohs(client_addr.sin_port), conn_fd);
 
-	// send welcome message
-	const char *welcome = "Servidor está no ar\n";
-	write(conn_fd, welcome, strlen(welcome));
+	// send a cute greeting for interactive clients
+	const char *welcome = "Server is up and running :3\n";
+	if (write(conn_fd, welcome, strlen(welcome)) < 0)
+		syslog(LOG_ERR, "server: failed to write welcome to fd=%d: %s",
+					conn_fd, strerror(errno));
 }
 
 static void handle_client_data(int index, struct pollfd **poll_fds, int *nfds)
 {
 	int sock_fd = (*poll_fds)[index].fd; // client fd
 	char buffer[MAX_LINE], response[MAX_LINE];
+	response[0] = '\0';
 
-	// check for error and disconnection
+	// check descriptor errors and disconnection events
 	if ((*poll_fds)[index].revents & (POLLERR | POLLHUP)) {
-		printf("Cliente fd=%d desconectado (erro ou hangup)\n", sock_fd);
+		syslog(LOG_INFO, "server: client fd=%d disconnected (poll error/hangup)",
+					sock_fd);
 		goto close_connection;
 	}
 
-	// read message sent by client
+	// read data sent by the client
 	ssize_t n = read(sock_fd, buffer, MAX_LINE - 1);
 
 	if (n < 0) {
-		syslog(LOG_ERR, "Error reading from fd=%d: %s", sock_fd, strerror(errno));
+		syslog(LOG_ERR, "server: failed to read from fd=%d: %s",
+					sock_fd, strerror(errno));
 		goto close_connection;
 	} else if (n == 0) {
-		// connection closed by client
-		printf("Cliente fd=%d fechou a conexão\n", sock_fd);
+		// connection closed by the client
+		syslog(LOG_INFO, "server: client fd=%d closed connection", sock_fd);
 		goto close_connection;
 	}
 
 	buffer[n] = '\0';
 
-	char *newline = strchr(buffer, '\n'); // strip newline from the end
+	// strip trailing newline characters from the received line
+	char *newline = strchr(buffer, '\n');
 	if (newline) *newline = '\0';
 	newline = strchr(buffer, '\r');
 	if (newline) *newline = '\0';
 
-	printf("Recebido de fd=%d (%zd bytes): '%s'\n", sock_fd, n, buffer);
+	syslog(LOG_DEBUG, "server: received from fd=%d (%zd bytes): '%s'",
+				sock_fd, n, buffer);
 
-	// using our custom parser to process client message
-	parsed_command *msg = parse_command(buffer);
+	// parse and validate command and arguments
+	parsed_command *cmd = parse_command(buffer);
 
-	if (!msg)
-		syslog(LOG_ERR, "Error %d: could not parse command", errno);
-	else if (!msg->is_valid)
-		printf("Invalid command");
-	else {
-		int result = execute_command(msg, response, MAX_LINE);
-
-		// if command is quit or exit, mark to disconnection
-		if (strcmp(msg->command, "QUIT") == 0 || strcmp(msg->command, "EXIT") == 0) {
-			free_parsed_command(msg);
-			write(sock_fd, response, strlen(response));
-			goto close_connection;
+	if (!cmd) {
+		syslog(LOG_ERR, "server: could not allocate parsed command for fd=%d",
+					sock_fd);
+		snprintf(response, sizeof(response),
+					"ERROR: Internal failure while processing command.\n");
+	} else if (!cmd->is_valid) {
+		syslog(LOG_WARNING, "server: invalid command from fd=%d: %s", sock_fd,
+				cmd->error_msg ? cmd->error_msg : "unknown parse error");
+		snprintf(response, sizeof(response), "ERROR: %s\n",
+				cmd->error_msg ? cmd->error_msg : "Invalid command");
+	} else {
+		int result = execute_command(cmd, response, MAX_LINE);
+		if (result != 0) {
+			syslog(LOG_WARNING, "server: command failed for fd=%d: %s",
+						sock_fd, cmd->command);
+			if (response[0] == '\0')
+				snprintf(response, sizeof(response),
+						"ERROR: Command execution failed.\n");
 		}
 	}
 
-	free_parsed_command(msg);
+	free_parsed_command(cmd);
 
-	// send message
+	// send response back to the client
 	if (write(sock_fd, response, strlen(response)) < 0) {
-		syslog(LOG_ERR, "Error writing to fd=%d: %s", sock_fd, strerror(errno));
+		syslog(LOG_ERR, "server: failed to write to fd=%d: %s",
+					sock_fd, strerror(errno));
 		goto close_connection;
 	}
 
 	return;
 
-/* sim isso é um goto, mas esse claramente simplifica e o código é claro. não
- * há razão pra ser religiosamente contra uma prática se ela se mostra boa pro
- * objetivo desejado */
+/* yeah, this is a go-to. nothing to worry about.
+ * https://c-faq.com/style/stylewars.html
+ * it is all over the linux kernel too */
+
+// single close block to avoid duplicated cleanup logic
 close_connection:
-	syslog(LOG_INFO, "Closing connection fd=%d", sock_fd);
+	syslog(LOG_INFO, "server: closing connection fd=%d", sock_fd);
 	close(sock_fd);
 	(*poll_fds)[index].fd = -1;
 
-	// contract array removing inactive fds in the end
+	// shrink array by trimming inactive descriptors at the end
 	while (*nfds > 1 && (*poll_fds)[*nfds - 1].fd < 0)
 		(*nfds)--;
 }
 
-int execute_command(const parsed_command *cmd, char *response, size_t response_size) {
-	/* TODO */
+int execute_command(const parsed_command *cmd, char *response,
+											size_t response_size)
+{
+    if (!cmd || !cmd->command) {
+		syslog(LOG_ERR, "server: null command object");
+        return -1;
+    }
+    
+	syslog(LOG_DEBUG, "server: executing command %s with %d argument(s)",
+					  cmd->command, cmd->arg_count);
+    
+    /* CREATE <key> */
+    if (strcmp(cmd->command, "CREATE") == 0) {
+        if (cmd->arg_count < 1) {
+			syslog(LOG_ERR, "server: CREATE requires a key");
+            return -1;
+        }
 
-	return 0;
+		// TODO: implement CREATE here
+
+		snprintf(response, response_size,
+						"OK: CREATE %s (not implemented)\n", cmd->args[0]);
+        return 0;
+    }
+    
+	/* GET <key> */
+    else if (strcmp(cmd->command, "GET") == 0) {
+        if (cmd->arg_count < 1) {
+			syslog(LOG_ERR, "server: GET requires a key");
+            return -1;
+        }
+
+        // TODO: implement GET here
+
+		snprintf(response, response_size,
+						"OK: GET %s (not implemented)\n", cmd->args[0]);
+        return 0;
+    }
+
+    /* SET <key> <value> */
+    else if (strcmp(cmd->command, "SET") == 0) {
+        if (cmd->arg_count < 2) {
+			syslog(LOG_ERR, "server: SET requires a key and a value");
+            return -1;
+        }
+
+        // TODO: implement SET here
+
+		snprintf(response, response_size,
+					"OK: SET %s = %s (not implemented)\n",
+					cmd->args[0], cmd->args[1]);
+        return 0;
+    }
+    
+	/* RESERVE <resource> */
+	else if (strcmp(cmd->command, "RESERVE") == 0) {
+        if (cmd->arg_count < 1) {
+			syslog(LOG_ERR, "server: RESERVE requires a resource");
+            return -1;
+        }
+
+		// TODO: implement RESERVE here
+
+		snprintf(response, response_size,
+					"OK: RESERVE %s (not implemented)\n", cmd->args[0]);
+		return 0;
+	}
+
+	/* RELEASE <resource> */
+	else if (strcmp(cmd->command, "RELEASE") == 0) {
+		if (cmd->arg_count < 1) {
+			syslog(LOG_ERR, "server: RELEASE requires a resource");
+			return -1;
+		}
+
+		// TODO: implement RELEASE here
+
+		snprintf(response, response_size,
+					"OK: RELEASE %s (not implemented)\n", cmd->args[0]);
+        return 0;
+    }
+    
+    /* LIST */
+    else if (strcmp(cmd->command, "LIST") == 0) {
+		// TODO: implement LIST logic here
+		snprintf(response, response_size, "OK: LIST (not implemented)\n");
+        return 0;
+    }
+    
+	// unknown command
+    else {
+		snprintf(response, response_size,
+					"ERROR: Command '%s' is not recognized.\n", cmd->command);
+        return -1;
+    }
 }
 
 int main(int argc, char *argv[])
 {
-	// for debug purposes
-	openlog("Servidor TCP", LOG_PID | LOG_CONS, LOG_USER);
+	(void) argc;
+	(void) argv;
+
+	// initialize process logging for the server
+	openlog("TCP Server", LOG_PID | LOG_CONS, LOG_USER);
 
 	int listen_fd;
-	SA server_addr;
+	struct sockaddr_in server_addr;
 
-	/* 1. Socket */
+	/* 1. socket */
 	listen_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (listen_fd < 0)
 		error_exit("Error: could not create socket");
 
-	// set socket option to reuse address when fail occurs
+	// allow address reuse for fast restarts
 	int opt = 1;
 	if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
 		error_exit("Error: setsockopt failed");
 
-	syslog(LOG_DEBUG, "%s", "Socket listen_fd criado");
-
-	// configure server address
+	// configure local server address
 	memset(&server_addr, 0, sizeof(server_addr));
 	server_addr.sin_family = AF_INET;
 	server_addr.sin_addr.s_addr = INADDR_ANY; 
 	server_addr.sin_port = htons(PORT);
 
-	/* 2. Bind */
-	if (bind(listen_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+	/* 2. bind */
+	if (bind(listen_fd, (struct sockaddr *)&server_addr,
+						sizeof(server_addr)) < 0)
 		error_exit("Error: could not bind address to socket");
-	syslog(LOG_DEBUG, "%s", "Feito o bind do servidor ao listen_fd");
+	syslog(LOG_DEBUG, "%s",
+			"Server address successfully bound to listening socket");
 
-	/* 3. Listen */
+	/* 3. listen */
 	if (listen(listen_fd, MAX_CLIENTS) < 0)
 		error_exit("Error: could not set server to listening mode");
-	syslog(LOG_DEBUG, "%s", "Servidor foi colocado em modo listen");
+	syslog(LOG_DEBUG, "%s", "Server set to listen mode");
 
-	// initialize pollfd data structure and allocate memory
+	// initialize poll structure used for connection multiplexing
 	int poll_size = INITIAL_POLL_SIZE;
 	struct pollfd *poll_fds = malloc(poll_size * sizeof(struct pollfd));
 	if (!poll_fds)
@@ -173,32 +280,27 @@ int main(int argc, char *argv[])
 	poll_fds[0].events = POLLIN;
 	int nfds = 1;
 
-	syslog(LOG_DEBUG, "%s", "Estruturas de dados do poll foram inicializadas");
+	syslog(LOG_DEBUG, "%s", "server: poll data structure initialized");
 
-	printf("Servidor TCP iniciado na porta %d\n", PORT);
+	syslog(LOG_INFO, "server: TCP server started on port %d", PORT);
 
-	/* 4. Main loop for accepting and processing connections */
-	int loop_step = 0;
+	/* 4. main loop for accepting and processing connections */
 	while (1) {
-		loop_step++;
-
 		/* 4.1. Poll */
 		int n_ready = poll(poll_fds, nfds, -1); // infinite timeout
 		if (n_ready < 0) {
-			if (errno == EINTR) continue; /* interrupted by signal */
+			if (errno == EINTR) continue; // interrupted by signal
 			error_exit("Error: poll failed");
 		}
 
-		printf("[Passo %d] Descritores prontos: %d\n", loop_step, n_ready);
-
-		// check listening socket to see if there's new connections
+		// check for new incoming connections on the listening socket
 		if (poll_fds[0].revents & POLLIN) {
-			printf("Nova conexão iniciada\n");
+			syslog(LOG_DEBUG, "%s", "server: new incoming connection detected");
 			handle_new_connection(listen_fd, &poll_fds, &nfds, &poll_size);
 			n_ready--;
 		}
 
-		// check the n_ready connections ready to make I/O operation
+		// process clients with pending I/O events
 		for (int i = 1; i < nfds && n_ready > 0; i++) {
 			if (poll_fds[i].fd < 0) continue;
 
@@ -206,19 +308,18 @@ int main(int argc, char *argv[])
 			   POLLERR	An error has occurred on this socket
 			   POLLHUP	The remote side of the connection hung up */
 			if (poll_fds[i].revents & (POLLIN | POLLERR | POLLHUP)) {
-				/* 4.2. Accept (handle new connections) */
-
-				printf("Cliente %d enviou dados\n", i);
+				/* 4.2. process data/state for active clients. */
 				handle_client_data(i, &poll_fds, &nfds);
 				n_ready--;
 			}
 		}
 	}
 
-	/* 5. Close (and cleanup) */
+	/* 5. close (and cleanup) */
 	for (int i = 0; i < nfds; i++)
 		if (poll_fds[i].fd >= 0)
 			close(poll_fds[i].fd);
+
 	free(poll_fds);
 	closelog();
 

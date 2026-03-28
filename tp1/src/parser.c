@@ -4,6 +4,43 @@
 #include <string.h>
 #include <ctype.h>
 
+/* private data structures */
+
+typedef enum {
+	TOKEN_COMMAND,      /* command keyword (CREATE, GET, SET, etc) */
+	TOKEN_IDENTIFIER,   /* symbolic name (identifier) */
+	TOKEN_STRING,       /* quoted string literal */
+	TOKEN_NUMBER,       /* numeric literal */
+	TOKEN_OPERATOR,     /* operator symbol (=, -, etc) */
+	TOKEN_DELIMITER,    /* punctuation separator (,, ;, etc) */
+	TOKEN_EOF,          /* logical end of input */
+	TOKEN_ERROR         /* invalid or unrecognized lexeme */
+} token_type;
+
+/* Lexical unit emitted by the tokenizer.
+ *
+ * Each token captures its classification, textual representation, and source
+ * position to support parsing, diagnostics, and error reporting.
+ */
+typedef struct {
+	token_type type;
+	char *value; // token text
+	int position; // zero-based char index in the original input
+} token;
+
+/* Stateful lexer cursor over an input string.
+ *
+ * Holds scan progress and current character so token extraction can be done
+ * incrementally across repeated calls to lexer_next_token().
+ */
+typedef struct {
+	const char *input;
+	size_t position; // current zero-based cursor position in input
+	size_t length; // cached total length of input
+	char current_char; // char currenctly pointed to by position
+} lexer;
+
+
 /* private, helper methods*/
 
 static char* strdup_safe(const char *str) {
@@ -20,15 +57,6 @@ static void lexer_advance(lexer *lex) {
         lex->current_char = '\0';
     else
         lex->current_char = lex->input[lex->position];
-}
-
-static char lexer_peek(lexer *lex, int offset) {
-    size_t peek_pos = lex->position + offset;
-
-	if (peek_pos >= lex->length)
-        return '\0';
-
-    return lex->input[peek_pos];
 }
 
 static void lexer_skip_whitespace(lexer *lex) {
@@ -55,10 +83,11 @@ static token* lexer_read_string(lexer *lex) {
     char buffer[1024];
     int idx = 0;
     
-    while (lex->current_char != '\0' && lex->current_char != quote && idx < 1023) {
+    while (lex->current_char != '\0' &&
+				lex->current_char != quote && idx < 1023) {
         if (lex->current_char == '\\') {
             lexer_advance(lex);
-            // Escapar caracteres especiais
+
             switch (lex->current_char) {
                 case 'n': buffer[idx++] = '\n'; break;
                 case 't': buffer[idx++] = '\t'; break;
@@ -79,7 +108,7 @@ static token* lexer_read_string(lexer *lex) {
         return token_create(TOKEN_STRING, buffer, start_pos);
     }
     
-    return token_create(TOKEN_ERROR, "String não terminada", start_pos);
+    return token_create(TOKEN_ERROR, "Unfinished string", start_pos);
 }
 
 static token* lexer_read_number(lexer *lex) {
@@ -89,7 +118,7 @@ static token* lexer_read_number(lexer *lex) {
     
     while (lex->current_char != '\0' && 
            (isdigit(lex->current_char) || lex->current_char == '.') && 
-           idx < 255) {
+			   idx < 255) {
         buffer[idx++] = lex->current_char;
         lexer_advance(lex);
     }
@@ -105,14 +134,14 @@ static token* lexer_read_identifier(lexer *lex) {
     
     while (lex->current_char != '\0' && 
            (isalnum(lex->current_char) || lex->current_char == '_') && 
-           idx < 255) {
+			   idx < 255) {
         buffer[idx++] = lex->current_char;
         lexer_advance(lex);
     }
     
     buffer[idx] = '\0';
     
-    // known commands (converted to lower case)
+    // known commands (converted to upper case)
     char upper_buffer[256];
     for (int i = 0; buffer[i]; i++)
         upper_buffer[i] = toupper(buffer[i]);
@@ -121,13 +150,17 @@ static token* lexer_read_identifier(lexer *lex) {
     // check if it's a command (first word)
     if (start_pos == 0 || 
         (start_pos > 0 && isspace(lex->input[start_pos - 1]))) {
-        if (strcmp(upper_buffer, "GET") == 0 ||
+        /*
+         * Accepted command keywords.
+         * Unrecognized keywords remain TOKEN_IDENTIFIER so parse_command()
+         * can reject them as invalid commands.
+         */
+        if (strcmp(upper_buffer, "CREATE") == 0 ||
+            strcmp(upper_buffer, "GET") == 0 ||
             strcmp(upper_buffer, "SET") == 0 ||
-            strcmp(upper_buffer, "DELETE") == 0 ||
-            strcmp(upper_buffer, "LIST") == 0 ||
-            strcmp(upper_buffer, "HELP") == 0 ||
-            strcmp(upper_buffer, "QUIT") == 0 ||
-            strcmp(upper_buffer, "EXIT") == 0) {
+            strcmp(upper_buffer, "RESERVE") == 0 ||
+            strcmp(upper_buffer, "RELEASE") == 0 ||
+            strcmp(upper_buffer, "LIST") == 0) {
             return token_create(TOKEN_COMMAND, upper_buffer, start_pos);
         }
     }
@@ -135,14 +168,12 @@ static token* lexer_read_identifier(lexer *lex) {
     return token_create(TOKEN_IDENTIFIER, buffer, start_pos);
 }
 
-/* public methods */
-
-void lexer_free(lexer *lex) {
+static void lexer_free(lexer *lex) {
     if (lex)
 		free(lex);
 }
 
-lexer *lexer_create(const char *input) {
+static lexer *lexer_create(const char *input) {
     if (!input) return NULL;
     
     lexer *lex = malloc(sizeof(*lex));
@@ -156,14 +187,14 @@ lexer *lexer_create(const char *input) {
     return lex;
 }
 
-void token_free(token *tok) {
+static void token_free(token *tok) {
     if (tok) {
         free(tok->value);
         free(tok);
     }
 }
 
-token* lexer_next_token(lexer *lex) {
+static token* lexer_next_token(lexer *lex) {
     if (!lex) return NULL;
     
     lexer_skip_whitespace(lex);
@@ -199,9 +230,11 @@ token* lexer_next_token(lexer *lex) {
         case ';':
             return token_create(TOKEN_DELIMITER, op, current_pos);
         default:
-            return token_create(TOKEN_ERROR, "Caractere inválido", current_pos);
+            return token_create(TOKEN_ERROR, "invalid char", current_pos);
     }
 }
+
+/* public methods */
 
 parsed_command* parse_command(const char *input) {
     if (!input || strlen(input) == 0) {
@@ -211,7 +244,7 @@ parsed_command* parse_command(const char *input) {
             cmd->args = NULL;
             cmd->arg_count = 0;
             cmd->is_valid = 0;
-            cmd->error_msg = strdup_safe("Entrada vazia");
+            cmd->error_msg = strdup_safe("Error: empty input");
         }
         return cmd;
     }
@@ -227,7 +260,7 @@ parsed_command* parse_command(const char *input) {
     
     lexer *lex = lexer_create(input);
     if (!lex) {
-        cmd->error_msg = strdup_safe("Erro ao criar lexer");
+        cmd->error_msg = strdup_safe("Error: could not create lexer");
         return cmd;
     }
     
@@ -235,13 +268,13 @@ parsed_command* parse_command(const char *input) {
     token *tok = lexer_next_token(lex);
     
     if (!tok) {
-        cmd->error_msg = strdup_safe("Erro ao ler token");
+        cmd->error_msg = strdup_safe("Error: could not read token");
         lexer_free(lex);
         return cmd;
     }
     
     if (tok->type != TOKEN_COMMAND) {
-        cmd->error_msg = strdup_safe("Comando inválido");
+        cmd->error_msg = strdup_safe("Invalid command");
         token_free(tok);
         lexer_free(lex);
         return cmd;
@@ -284,9 +317,8 @@ parsed_command* parse_command(const char *input) {
     
     lexer_free(lex);
     
-    if (!cmd->error_msg) {
+    if (!cmd->error_msg)
         cmd->is_valid = 1;
-    }
     
     return cmd;
 }
@@ -309,20 +341,19 @@ void free_parsed_command(parsed_command *cmd) {
 
 void print_parsed_command(const parsed_command *cmd) {
     if (!cmd) {
-        printf("Comando NULL\n");
+        printf("NULL command\n");
         return;
     }
-    
-    printf("Parsed command\n");
-    printf("Valid? %s\n", cmd->is_valid ? "Yes" : "No");
+
+	printf("Parsed message:\n");
     
     if (cmd->error_msg)
-        printf("Erro: %s\n", cmd->error_msg);
+        printf("Error: %s\n", cmd->error_msg);
     
     if (cmd->command)
-        printf("Comando: %s\n", cmd->command);
+        printf("Command: %s\n", cmd->command);
     
-    printf("Argumentos (%d):\n", cmd->arg_count);
+    printf("Arguments (%d):\n", cmd->arg_count);
     for (int i = 0; i < cmd->arg_count; i++)
         printf("  [%d]: %s\n", i, cmd->args[i]);
 }
